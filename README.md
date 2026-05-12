@@ -194,15 +194,15 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-  T[POST /invoices/:id/transition] --> P[Zod parse body.to in {draft,issued,paid,void}]
-  P --> L[$transaction]
-  L --> Q[findById]
-  Q -- not found --> N404[404 INVOICE_NOT_FOUND]
-  Q -- found --> F[fsm.transitionStatus]
-  F -- invalid --> N409a[409 INVALID_TRANSITION]
-  F -- paid --> UP[updateStatus: status=paid, paidAt=now]
-  F -- void --> UV[updateStatus: status=void, voidedAt=now]
-  UP --> OK[200 InvoiceDTO]
+  T["POST /invoices/:id/transition"] --> P["Zod parse body.to in draft, issued, paid, void"]
+  P --> L["prisma.transaction"]
+  L --> Q["findById"]
+  Q -- "not found" --> N404["404 INVOICE_NOT_FOUND"]
+  Q -- "found" --> F["fsm.transitionStatus"]
+  F -- "invalid" --> N409a["409 INVALID_TRANSITION"]
+  F -- "paid" --> UP["updateStatus: status=paid, paidAt=now"]
+  F -- "void" --> UV["updateStatus: status=void, voidedAt=now"]
+  UP --> OK["200 InvoiceDTO"]
   UV --> OK
 ```
 
@@ -227,36 +227,36 @@ sequenceDiagram
   end
   S->>P: renderInvoicePdf(dto)
   P-->>S: Buffer
-  S-->>A: { buffer, dto }
-  A-->>B: 200 application/pdf<br/>Content-Disposition: attachment; filename="invoice-{number}.pdf"
+  S-->>A: buffer + dto
+  A-->>B: 200 application/pdf — Content-Disposition attachment, filename invoice-NUMBER.pdf
 ```
 
 **2.5.4 Money rounding (`calcTaxMinor`)**
 
 ```mermaid
 flowchart LR
-  In[subtotalMinor, taxRateBps] --> Mul[numerator = subtotalMinor * taxRateBps]
-  Mul --> RHE[roundHalfEven<br/>numerator / 10000]
-  RHE --> Q[q = trunc(numerator / 10000)<br/>r = numerator - q * 10000]
-  Q --> Cmp{2*|r| vs 10000}
-  Cmp -- "< (below half)" --> KeepQ[return q]
-  Cmp -- "> (above half)" --> Up[return q + sign(numerator)]
-  Cmp -- "= (exact tie)" --> Even{q even?}
-  Even -- yes --> KeepQ
-  Even -- no --> Up
+  In["subtotalMinor, taxRateBps"] --> Mul["numerator = subtotalMinor * taxRateBps"]
+  Mul --> RHE["roundHalfEven<br/>numerator / 10000"]
+  RHE --> Q["q = trunc(numerator / 10000)<br/>r = numerator - q * 10000"]
+  Q --> Cmp{"compare 2*abs(r) vs 10000"}
+  Cmp -- "below half" --> KeepQ["return q"]
+  Cmp -- "above half" --> Up["return q + sign(numerator)"]
+  Cmp -- "exact tie" --> Even{"q even?"}
+  Even -- "yes" --> KeepQ
+  Even -- "no" --> Up
 ```
 
 **2.5.5 Sequencing / numbering (monthly counter)**
 
 ```mermaid
 flowchart TD
-  A[draft -> issued in $transaction] --> Y[parseYearMonth(now) = "YYYYMM"]
-  Y --> U[MonthlyCounter UPSERT<br/>create value=1<br/>OR update value=value+1]
-  U --> Row[Row-level lock serializes<br/>concurrent issuers in same UTC month]
-  Row --> F[formatInvoiceNumber<br/>"INV-YYYYMM-####" (pad-left 4)]
-  F --> Update[Invoice.update<br/>status=issued, number=INV-..., issuedAt=now]
-  Update -- COMMIT --> Done[Atomic: counter + invoice<br/>commit or rollback together]
-  Update -- P2002 unique --> Coll[409 NUMBER_COLLISION]
+  A["draft to issued — inside prisma.transaction"] --> Y["parseYearMonth(now) returns YYYYMM"]
+  Y --> U["MonthlyCounter UPSERT<br/>create value=1<br/>OR update value=value+1"]
+  U --> Row["Row-level lock serialises<br/>concurrent issuers in the same UTC month"]
+  Row --> F["formatInvoiceNumber<br/>INV-YYYYMM-#### (pad-left 4)"]
+  F --> Update["Invoice.update<br/>status=issued, number=INV-..., issuedAt=now"]
+  Update -- "COMMIT" --> Done["Atomic: counter + invoice<br/>commit or rollback together"]
+  Update -- "P2002 unique" --> Coll["409 NUMBER_COLLISION"]
 ```
 
 ---
@@ -895,11 +895,16 @@ totalMinor = 200 + 36 = 236
 ```mermaid
 stateDiagram-v2
     [*] --> draft
-    draft  --> issued : transition(issued)<br/>requires dueAt set & >= now;<br/>allocates number INV-YYYYMM-####
+    draft  --> issued : transition(issued)
     issued --> paid   : transition(paid)
     issued --> void   : transition(void)
     paid   --> [*]
     void   --> [*]
+    note right of issued
+      draft to issued requires dueAt set and on or after now.
+      Allocates the next per-month sequence as INV-YYYYMM-####
+      inside the same prisma.transaction as the status update.
+    end note
 ```
 
 The 13 disallowed pairs (every other from→to in a 4×4 matrix) return `409 INVALID_TRANSITION`. This is enforced uniformly through the FSM, including `*→draft` (no resurrection) and `*→self` (no idempotent re-tagging). See `apps/api/src/domain/fsm.ts` and the 16-pair coverage in `apps/api/test/fsm.spec.ts`.
@@ -1032,7 +1037,38 @@ oMazons-Invoice-Service/
 
 ---
 
-## 17. Contributing
+## 17. Submission Notes (per `REQUIREMENT.md`)
+
+`REQUIREMENT.md` asks the README to include four things. Item 1 ("how to run it") is Sections 4–10 above. The remaining three are below.
+
+### 17.1 What I'd do differently with another 3 hours
+
+1. **Integration tests** for `POST /invoices → transition → pdf` against a real testcontainer-backed Postgres, asserting the monotonicity invariant under concurrent issuers (currently only the in-memory mock proves the contract — see `apps/api/test/numbering.spec.ts`).
+2. **Optimistic concurrency** on `Invoice.updateStatus` (a `version` column + `updateMany` predicate) so a stale SPA cannot race a transition and silently win.
+3. **Money type at the boundary** — a `MinorInt` branded type with arithmetic helpers, so accidental `+ 0.18` math becomes a compile error rather than a runtime invariant assertion. The branded `Minor` type in `apps/api/src/domain/money.ts` is the first step; the next is plumbing it everywhere.
+4. **Better empty / loading / error states** in the SPA and a confirm dialog before `void` (one-way, terminal — easy to fat-finger).
+5. **OpenAPI / Swagger UI** wired off the existing Zod schemas via `fastify-type-provider-zod` (already a dependency). This would replace the manual cURL block in Section 12 with a clickable schema-driven UI.
+
+### 17.2 Tradeoffs
+
+- **Plain CSS, no Tailwind/Vuetify.** The spec says "function over polish"; setting up a CSS framework would have eaten time I'd rather spend on money math and FSM correctness.
+- **Vite proxy instead of CORS.** Same-origin SPA→API in dev avoids a CORS plugin + browser preflight surface area, and matches how this would deploy behind a reverse proxy (the canonical case in production).
+- **Numbers allocated only at issue, not at create.** Drafts can be deleted/abandoned without leaving gaps in the issued/paid sequence. Gaps for `void` are explicitly tolerated by spec.
+- **`@react-pdf/renderer` inside the Fastify process** (no worker pool). Single-process is fine at this size; revisit when PDF rendering shows up in the P99.
+- **Curated 6-currency enum** (`INR/USD/EUR/GBP/AED/SGD`) instead of the full ISO 4217 list. All six are 2-decimal-scale, which keeps the integer-minor-units invariant uniform across the wire. Adding more is a one-line schema change.
+- **Money columns widened to `BIGINT`** in migration `20260512180000_bigint_money`. The initial `INTEGER` (Int32) capped totals around 21.47M minor units; `BIGINT` lifts the ceiling to 9.22 × 10¹⁸ minor units. The bigint→number narrowing happens once at the repository boundary (`apps/api/src/repositories/invoice.repository.ts:36`) and is asserted to stay inside `Number.MAX_SAFE_INTEGER`.
+- **No auth, no customer CRUD, no deployment** — explicit non-goals from `REQUIREMENT.md` § "Explicit non-goals".
+
+### 17.3 One thing I'd push back on
+
+> "Numbers (`number` field) must be **monotonic per month** — no gaps under normal operation, no duplicates ever."
+> — `REQUIREMENT.md`, business rules
+
+"No gaps under normal operation" is a soft guarantee that's expensive to deliver and rarely what auditors actually want. A monthly counter inside a transaction gives you uniqueness and ordering, but a rolled-back transaction (network blip, validation failure on a downstream side-effect, deploy mid-issue) still consumes a sequence value — you'll see legitimate gaps. The right ask is usually **"monotonic, unique, never re-used"** and let gaps happen; if a regulator truly needs zero gaps they need a serialised issuer with a reconcile/repair path, not "atomic counter + best effort." Worth a 5-minute clarifying conversation before building.
+
+---
+
+## 18. Contributing
 
 Short conventions for this take-home; adapt for real teams.
 
@@ -1047,7 +1083,7 @@ Short conventions for this take-home; adapt for real teams.
 
 ---
 
-## 18. License
+## 19. License
 
 Not applicable — this repository does not ship a `LICENSE` file. Treat the source as "all rights reserved" by the author unless a license is added separately.
 
