@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "outDir": "../../dist/pdf"
+  },
+  "include": ["./**/*.tsx", "./**/*.ts"],
+  "exclude": ["../../dist/**", "../../node_modules/**"]
+}

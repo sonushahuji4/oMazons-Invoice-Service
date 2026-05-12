@@ -1,0 +1,21 @@
+{
+  "name": "invoice-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Invoice Service monorepo: Fastify API + Vue SPA + shared schemas.",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.1.0",
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,magenta \"pnpm --filter api dev\" \"pnpm --filter web dev\"",
+    "build": "pnpm --filter shared build && pnpm --filter api build && pnpm --filter web build",
+    "test": "pnpm --filter api test",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -r --if-present typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "typescript": "^5.4.5"
+  }
+}
