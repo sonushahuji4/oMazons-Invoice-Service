@@ -900,12 +900,9 @@ stateDiagram-v2
     issued --> void   : transition(void)
     paid   --> [*]
     void   --> [*]
-    note right of issued
-      draft to issued requires dueAt set and on or after now.
-      Allocates the next per-month sequence as INV-YYYYMM-####
-      inside the same prisma.transaction as the status update.
-    end note
 ```
+
+`draft → issued` requires `dueAt` set and on/after now. It allocates the next per-month sequence as `INV-YYYYMM-####` inside the same `prisma.$transaction` as the status update.
 
 The 13 disallowed pairs (every other from→to in a 4×4 matrix) return `409 INVALID_TRANSITION`. This is enforced uniformly through the FSM, including `*→draft` (no resurrection) and `*→self` (no idempotent re-tagging). See `apps/api/src/domain/fsm.ts` and the 16-pair coverage in `apps/api/test/fsm.spec.ts`.
 
