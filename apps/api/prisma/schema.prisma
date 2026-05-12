@@ -1,0 +1,47 @@
+generator client {
+    provider = "prisma-client-js"
+    previewFeatures = []
+}
+
+datasource db {
+    provider = "postgresql"
+    url = env("DATABASE_URL")
+}
+
+enum InvoiceStatus {draft, issued, paid, void}
+
+model Invoice {
+    id String @id @default(uuid()) @db.Uuid
+    number String?       @unique
+    customerName String
+    customerEmail String
+    currency String
+    taxRateBps Int
+    subtotalMinor Int
+    taxMinor Int
+    totalMinor Int
+    status InvoiceStatus @default(draft)
+    issuedAt DateTime?
+    dueAt DateTime?
+    paidAt DateTime?
+    voidedAt DateTime?
+    createdAt DateTime      @default(now())
+    updatedAt DateTime      @updatedAt
+    lineItems LineItem[]
+
+    @@index([status, issuedAt(sort: Desc)])
+    @@index([createdAt(sort: Desc)])
+    @@index([customerEmail])
+}
+
+model LineItem {
+    id String  @id @default(uuid()) @db.Uuid
+    invoiceId String  @db.Uuid
+    description String
+    quantity Int
+    unitPriceMinor Int
+    position Int
+    invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+    @@index([invoiceId, position])
+}
